@@ -1,5 +1,7 @@
 import logging
 import os
+from logging.handlers import RotatingFileHandler
+
 import requests
 import time
 
@@ -27,10 +29,16 @@ HOMEWORK_VERDICTS = {
 
 ENV_VARIABLES = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
 
-current_status = ''
-
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s [%(levelname)s] %(message)s')
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+handler = RotatingFileHandler('homework_logs.log', maxBytes=50000000,
+                              backupCount=5, encoding='utf-8')
+handler.setFormatter(
+    logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+logger.addHandler(handler)
 
 
 def check_tokens():
@@ -45,7 +53,7 @@ def send_message(bot, message):
     """Отправляет сообщение пользователю."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logging.debug(f'Бот отправил сообщение: {message}')
+        logger.debug(f'Бот отправил сообщение: {message}')
     except Exception as err:
         logging.error(f'Сбой отправки сообщения: {message}. Ошибка: {err}')
 
@@ -62,7 +70,7 @@ def get_api_answer(timestamp):
             raise APIGetErr
 
     except requests.RequestException as ex:
-        logging.error(ex)
+        logger.error(ex)
 
 
 def check_response(response):
@@ -80,7 +88,6 @@ def check_response(response):
 
 def parse_status(homework):
     """Обрабатывает ответ сервера."""
-    global current_status
     homework_name = homework.get('homework_name')
     if homework_name is None:
         raise NoHomeworks
@@ -102,19 +109,19 @@ def main():
             homework = check_response(response)
             message = parse_status(homework)
             send_message(bot, message)
-            logging.info(homework)
+            logger.info(homework)
             timestamp = response.get('current_date')
         except APIGetErr:
-            logging.error('Ошибка при получении данных с сервера')
+            logger.error('Ошибка при получении данных с сервера')
         except AvailabilityEnvironmentalVariables:
-            logging.critical(
+            logger.critical(
                 'Одна или несколько переменных окружения недоступны!')
         except NoHomeworks:
-            logging.info('Статус работ не изменился')
+            logger.info('Статус работ не изменился')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             send_message(bot, message)
-            logging.info(message)
+            logger.info(message)
         finally:
             time.sleep(RETRY_PERIOD)
 
