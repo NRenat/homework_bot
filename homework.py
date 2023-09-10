@@ -1,15 +1,16 @@
 import logging
-import os
+import sys
 from logging.handlers import RotatingFileHandler
-
+import os
 import requests
 import time
+from http import HTTPStatus
 
 import telegram
 from dotenv import load_dotenv
 
-from exceptions import AvailabilityEnvironmentalVariables, NoHomeworkStatus, \
-    NoHomeworks, APIGetErr
+from exceptions import NoHomeworkStatus, NoHomeworks, APIGetErr, \
+    FailedSendingMessage
 
 load_dotenv()
 
@@ -30,23 +31,27 @@ HOMEWORK_VERDICTS = {
 ENV_VARIABLES = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
 
 logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s [%(levelname)s] %(message)s')
+                    format='%(asctime)s [%(levelname)s] %(message)s '
+                           'Функция: %(funcName)s')
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 handler = RotatingFileHandler('homework_logs.log', maxBytes=50000000,
                               backupCount=5, encoding='utf-8')
 handler.setFormatter(
-    logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s Функция: %(funcName)s'))
 logger.addHandler(handler)
 
 
 def check_tokens():
     """Проверяет требуемые токены."""
-    if (TELEGRAM_TOKEN or TELEGRAM_CHAT_ID or PRACTICUM_TOKEN) is None:
-        logging.critical('Одна или несколько переменных окружения недоступны!')
-        raise AvailabilityEnvironmentalVariables(
-            'Одна или несколько переменных окружения недоступны!')
+    if all(variable is None for variable in
+           (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)):
+        logger.critical('Одна или несколько переменных окружения недоступны!')
+        return False
+    else:
+        return True
 
 
 def send_message(bot, message):
@@ -56,6 +61,7 @@ def send_message(bot, message):
         logger.debug(f'Бот отправил сообщение: {message}')
     except Exception as err:
         logging.error(f'Сбой отправки сообщения: {message}. Ошибка: {err}')
+        raise FailedSendingMessage
 
 
 def get_api_answer(timestamp):
@@ -64,13 +70,14 @@ def get_api_answer(timestamp):
     try:
         response = requests.get(ENDPOINT, headers=HEADERS,
                                 params=params)
-        if response.status_code == 200:
+        if response.status_code == HTTPStatus.OK:
             return response.json()
         else:
+            logger.error('Ошибка при получении данных с сервера')
             raise APIGetErr
 
     except requests.RequestException as ex:
-        logger.error(ex)
+        raise ConnectionError('ConnectionError') from ex
 
 
 def check_response(response):
@@ -78,11 +85,18 @@ def check_response(response):
     if type(response) != dict:
         raise TypeError
     homeworks = response.get('homeworks')
+
+    if homeworks is None:
+        logger.error('homeworks not in response!')
+        raise KeyError
+
     if type(homeworks) != list:
+        logger.error('Получен неверный тип данных. ')
         raise TypeError
     try:
         return homeworks[0]
     except IndexError:
+        logger.info('Статус работ не изменился.')
         raise NoHomeworks
 
 
@@ -90,9 +104,11 @@ def parse_status(homework):
     """Обрабатывает ответ сервера."""
     homework_name = homework.get('homework_name')
     if homework_name is None:
+        logger.info('Статус работ не изменился.')
         raise NoHomeworks
     status = homework.get('status')
     if status not in HOMEWORK_VERDICTS:
+        logger.error('Статус работы не получен!')
         raise NoHomeworkStatus
     verdict = HOMEWORK_VERDICTS.get(status)
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -100,7 +116,11 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    if not check_tokens():
+        logger.critical(
+            'Одна или несколько переменных окружения недоступны!')
+        sys.exit()
+
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     while True:
@@ -108,20 +128,16 @@ def main():
             response = get_api_answer(timestamp)
             homework = check_response(response)
             message = parse_status(homework)
+
             send_message(bot, message)
-            logger.info(homework)
             timestamp = response.get('current_date')
-        except APIGetErr:
-            logger.error('Ошибка при получении данных с сервера')
-        except AvailabilityEnvironmentalVariables:
-            logger.critical(
-                'Одна или несколько переменных окружения недоступны!')
-        except NoHomeworks:
-            logger.info('Статус работ не изменился')
+
         except Exception as error:
-            message = f'Сбой в работе программы: {error}'
-            send_message(bot, message)
-            logger.info(message)
+            exception_name = type(error).__name__
+            error_message = error.__context__
+            message = f'Exception: {exception_name} - {error_message}'
+            # send_message(bot, message)
+            logger.error(message)
         finally:
             time.sleep(RETRY_PERIOD)
 
