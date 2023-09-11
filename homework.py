@@ -28,8 +28,6 @@ HOMEWORK_VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
-ENV_VARIABLES = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
-
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s [%(levelname)s] %(message)s '
                            'Функция: %(funcName)s')
@@ -39,19 +37,19 @@ logger.setLevel(logging.DEBUG)
 handler = RotatingFileHandler('homework_logs.log', maxBytes=50000000,
                               backupCount=5, encoding='utf-8')
 handler.setFormatter(
-    logging.Formatter(
-        '%(asctime)s [%(levelname)s] %(message)s Функция: %(funcName)s'))
+    logging.Formatter((
+        '%(asctime)s [%(levelname)s] [%(filename)s:%(lineno)d] '
+        '%(message)s Функция: %(funcName)s')))
 logger.addHandler(handler)
 
 
 def check_tokens():
     """Проверяет требуемые токены."""
-    if all(variable is None for variable in
-           (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)):
+    if all((PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)):
         logger.critical('Одна или несколько переменных окружения недоступны!')
-        return False
-    else:
         return True
+    else:
+        return False
 
 
 def send_message(bot, message):
@@ -59,9 +57,10 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.debug(f'Бот отправил сообщение: {message}')
+
     except Exception as err:
-        logging.error(f'Сбой отправки сообщения: {message}. Ошибка: {err}')
-        raise FailedSendingMessage
+        raise FailedSendingMessage(
+            f'Сбой отправки сообщения: {message}. Ошибка: {err}')
 
 
 def get_api_answer(timestamp):
@@ -87,31 +86,38 @@ def check_response(response):
     homeworks = response.get('homeworks')
 
     if homeworks is None:
-        logger.error('homeworks not in response!')
-        raise KeyError
+        raise KeyError('homeworks not in response!')
 
     if type(homeworks) != list:
-        logger.error('Получен неверный тип данных. ')
-        raise TypeError
+        raise TypeError('Получен неверный тип данных.')
     try:
         return homeworks[0]
     except IndexError:
-        logger.info('Статус работ не изменился.')
-        raise NoHomeworks
+        raise NoHomeworks('Статус работ не изменился.')
 
 
 def parse_status(homework):
     """Обрабатывает ответ сервера."""
     homework_name = homework.get('homework_name')
     if homework_name is None:
-        logger.info('Статус работ не изменился.')
-        raise NoHomeworks
+        raise NoHomeworks('Статус работ не изменился.')
     status = homework.get('status')
     if status not in HOMEWORK_VERDICTS:
-        logger.error('Статус работы не получен!')
-        raise NoHomeworkStatus
+        raise NoHomeworkStatus('Статус работы не получен!')
     verdict = HOMEWORK_VERDICTS.get(status)
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+
+
+def check_message_repeats(bot, message, last_message):
+    """Проверяет, было ли отправлено идентичное сообщение перед текущим."""
+    if last_message == message:
+        logger.info(
+            'Полученное сообщение идентично предыдущему. Пропуск сообщения!')
+        return last_message
+
+    send_message(bot, message)
+    last_message = message
+    return last_message
 
 
 def main():
@@ -123,21 +129,27 @@ def main():
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
+    last_message = ''
     while True:
         try:
             response = get_api_answer(timestamp)
             homework = check_response(response)
             message = parse_status(homework)
-
-            send_message(bot, message)
+            last_message = check_message_repeats(bot, message, last_message)
             timestamp = response.get('current_date')
 
-        except Exception as error:
-            exception_name = type(error).__name__
-            error_message = error.__context__
-            message = f'Exception: {exception_name} - {error_message}'
-            # send_message(bot, message)
-            logger.error(message)
+        except FailedSendingMessage as ex:
+            # Если я оставляю отправку сообщений, у меня не проходит автотест.
+            # Требует логирования неудачной отправки сообщения с уровнем ERROR.
+            # Поэтому именно это исключения я вынес отдельно.
+            logger.error(ex)
+
+        except Exception as ex:
+            exception_name = type(ex).__name__
+            error_message = str(ex)
+            message = str(f'{exception_name} - {error_message}')
+            last_message = check_message_repeats(bot, message, last_message)
+            logger.error(ex)
         finally:
             time.sleep(RETRY_PERIOD)
 
