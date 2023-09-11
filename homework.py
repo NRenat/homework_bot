@@ -139,9 +139,6 @@ def main():
             timestamp = response.get('current_date')
 
         except FailedSendingMessage as ex:
-            # Если я оставляю отправку сообщений, у меня не проходит автотест.
-            # Требует логирования неудачной отправки сообщения с уровнем ERROR.
-            # Поэтому именно это исключения я вынес отдельно.
             logger.error(ex)
 
         except Exception as ex:
