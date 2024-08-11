@@ -1,15 +1,15 @@
 import logging
-import os
 from logging.handlers import RotatingFileHandler
-
+import os
 import requests
 import time
+from http import HTTPStatus
 
 import telegram
 from dotenv import load_dotenv
 
 from exceptions import AvailabilityEnvironmentalVariables, NoHomeworkStatus, \
-    NoHomeworks, APIGetErr
+    NoHomeworks, APIGetErr, FailedSendingMessage
 
 load_dotenv()
 
@@ -29,61 +29,43 @@ HOMEWORK_VERDICTS = {
 
 ENV_VARIABLES = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
 
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s [%(levelname)s] %(message)s')
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-handler = RotatingFileHandler('homework_logs.log', maxBytes=50000000,
-                              backupCount=5, encoding='utf-8')
-handler.setFormatter(
-    logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-logger.addHandler(handler)
-
 
 def check_tokens():
     """Проверяет требуемые токены."""
-    if (TELEGRAM_TOKEN or TELEGRAM_CHAT_ID or PRACTICUM_TOKEN) is None:
-        logging.critical('Одна или несколько переменных окружения недоступны!')
-        raise AvailabilityEnvironmentalVariables(
-            'Одна или несколько переменных окружения недоступны!')
+    return all(variable is None for variable in
+               (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID))
 
 
 def send_message(bot, message):
     """Отправляет сообщение пользователю."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logger.debug(f'Бот отправил сообщение: {message}')
     except Exception as err:
-        logging.error(f'Сбой отправки сообщения: {message}. Ошибка: {err}')
+        raise FailedSendingMessage
 
 
 def get_api_answer(timestamp):
     """Получает ответ с сервера."""
     params = {'from_date': timestamp}
-    try:
-        response = requests.get(ENDPOINT, headers=HEADERS,
-                                params=params)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise APIGetErr
-
-    except requests.RequestException as ex:
-        logger.error(ex)
+    response = requests.get(ENDPOINT, headers=HEADERS,
+                            params=params)
+    if response.status_code == HTTPStatus.OK:
+        return response.json()
+    else:
+        raise APIGetErr
 
 
 def check_response(response):
     """Проверяет ответ сервера."""
-    if type(response) != dict:
-        raise TypeError
+    if not isinstance(response, dict):
+        raise TypeError("Expected a dictionary")
     homeworks = response.get('homeworks')
-    if type(homeworks) != list:
-        raise TypeError
+    if not isinstance(homeworks, list):
+        raise TypeError("Expected a list")
     try:
         return homeworks[0]
     except IndexError:
-        raise NoHomeworks
+        raise NoHomeworks("No homework found")
 
 
 def parse_status(homework):
@@ -100,7 +82,22 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s [%(levelname)s] %(message)s.'
+                               'Функция: %(funcName)s')
+
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+    handler = RotatingFileHandler('homework_logs.log', maxBytes=50000000,
+                                  backupCount=5, encoding='utf-8')
+    handler.setFormatter(
+        logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s. Функция: %(funcName)s'))
+    logger.addHandler(handler)
+
+    if not check_tokens():
+        raise AvailabilityEnvironmentalVariables(
+            'Одна или несколько переменных окружения недоступны!')
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     while True:
@@ -108,6 +105,7 @@ def main():
             response = get_api_answer(timestamp)
             homework = check_response(response)
             message = parse_status(homework)
+
             send_message(bot, message)
             logger.info(homework)
             timestamp = response.get('current_date')

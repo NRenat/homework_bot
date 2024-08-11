@@ -12,3 +12,7 @@ class NoHomeworks(Exception):
 
 class APIGetErr(Exception):
     pass
+
+
+class FailedSendingMessage(Exception):
+    pass
