@@ -1,7 +1,3 @@
-class AvailabilityEnvironmentalVariables(Exception):
-    pass
-
-
 class NoHomeworkStatus(Exception):
     pass
 
