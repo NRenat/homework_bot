@@ -17,4 +17,5 @@ python homework.py
 ```
 
 ## Технологии:
+* Python 3.9
 * python-telegram-bot
